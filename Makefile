@@ -1,6 +1,7 @@
+CONFIG_MODULE_SIG=n
+
 ifneq ($(KERNELRELEASE),)
-	obj-m := hello_world.o
-#	Hello_World_4-objs := Hello_World_4_Start.o Hello_World_4_Stop.o
+	obj-m := pm_simple.o
 else
 	KERNEL_DIR ?= /lib/modules/$(shell uname -r)/build
 	PWD := $(shell pwd)

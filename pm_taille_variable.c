@@ -11,10 +11,10 @@
 
 #define LICENCE "GPL"
 #define AUTEUR "Zaragoza Jérémy jeremy.zaragoza@univ-tlse3.fr"
-#define DESCRIPTION "Module Peripherique TP2 simple"
+#define DESCRIPTION "Module Peripherique TP3 taille variable"
 #define DEVICE "GPL"
 
-#define BUF_SIZE 256            //taille du buffer
+#define MAX_BUF_SIZE 256
 
 int init_periph(void);
 static void cleanup_periph(void);
@@ -30,25 +30,7 @@ MODULE_LICENSE(LICENCE);
 MODULE_AUTHOR(AUTEUR);
 MODULE_DESCRIPTION(DESCRIPTION);
 MODULE_SUPPORTED_DEVICE(DEVICE);
-                          
-/*
- * loff_t (*llseek) (struct file *, loff_t, int);
- * ssize_t (*read) (struct file *, char *, size_t, loff_t *);
- * ssize_t (*write) (struct file *, const char *, size_t, loff_t *);
- * int (*readdir) (struct file *, void *, filldir_t);
- * unsigned int (*poll) (struct file *, struct poll_table_struct *);
- * int (*unlocked_ioctl) (struct file *, unsigned int, unsigned long);
- * int (*mmap) (struct file *, struct vm_area_struct *);
- * int (*open) (struct inode *, struct file *);
- * int (*flush) (struct file *);
- * int (*release) (struct inode *, struct file *);
- * int (*fsync) (struct inode *, struct dentry *, int);
- * int (*lock) (struct file *, int, struct file_lock *);
- * ssize_t (*readv) (struct file *, const struct iovec *, unsigned long, loff_t *);
- * ssize_t (*writev) (struct file *, const struct iovec *, unsigned long, loff_t *);
- * struct module *owner;
- */
-                                
+
 struct file_operations f_operator = {
     .owner = THIS_MODULE,
     .read = &read_periph,
@@ -66,6 +48,7 @@ dev_t first_dev;
 //structure pour les données du periph
 typedef struct {
     char* buffer;
+    size_t size;
 } Data;
 
 static Data data;
@@ -93,6 +76,7 @@ int init_periph(void){
         return -EINVAL;
     }
     //data.buffer = (char *)kmalloc(BUF_SIZE * sizeof(char), GFP_KERNEL);
+    data.size = 0;
     
     return 0;
 }
@@ -138,15 +122,16 @@ static ssize_t read_periph(struct file *f, char *buffer, size_t size, loff_t *of
     
     //recuperation taille a copier dans le buffer
     int sizeToCopy;
-    if (BUF_SIZE < size)
-        sizeToCopy = BUF_SIZE;
+    if (MAX_BUF_SIZE < size)
+        sizeToCopy = MAX_BUF_SIZE;
     else
         sizeToCopy = size;
     
     //copie des données vers l'espace utilisateur
-    if(data.buffer != NULL){
+    if(data.size != 0){
         if(copy_to_user(buffer, data.buffer, sizeToCopy)==0)
             kfree(data.buffer);     //lecture destructrice
+            data.size = 0;          //buffer vide
         else
             return -EFAULT;
     }
@@ -161,14 +146,16 @@ static ssize_t read_periph(struct file *f, char *buffer, size_t size, loff_t *of
 static ssize_t write_periph(struct file *f, const char *buf, size_t size, loff_t *offset){
     printk(KERN_ALERT "[DEBUG] Ecriture\n");
     //on vide le buffer avant utilisation (ecriture destructrice)
-    if(data.buffer != NULL)
+    if(data.size != 0){
         kfree(data.buffer);
+        data.size = 0;
+    }
     
     //allocation memoire du nouveau buffer de taille "BUF_SIZE"
-    data.buffer = (char *)kmalloc(BUF_SIZE * sizeof(char), GFP_KERNEL);
+    data.buffer = (char *)kmalloc(size * sizeof(char), GFP_KERNEL);
     
     //recuperation des données depuis l'espace utilisateur
-    int sizeCopy = copy_from_user(data.buffer, buf, size);
+    data.size = copy_from_user(data.buffer, buf, size);
     
-    return (size - sizeCopy);
+    return (size - data.size);
 }
