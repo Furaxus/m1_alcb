@@ -1,6 +1,6 @@
 #include <linux/init.h>
 #include <linux/module.h>
-#include <linux/slab.h>        //pour le kmalloc
+#include <linux/slab.h>         //pour le kmalloc
 #include <linux/kernel.h>
 #include <linux/types.h>        //pour stocker le majeur / mineur
 #include <linux/kdev_t.h>       //pour les macro MINOR(dev_t) MAJOR(dev_t) MKDEV(int major, int minor)
@@ -45,6 +45,7 @@ struct file_operations f_operator = {
  */
 struct cdev *my_cdev;
 dev_t first_dev;
+bool file_open = false;
 //structure pour les données du periph
 typedef struct {
     char* buffer;
@@ -63,7 +64,7 @@ int init_periph(void){
         return -EINVAL;
     }
     
-    printk(KERN_ALERT "Init allocated (major, minor)=(%d,%d)\n",MAJOR(first_dev),MINOR(first_dev));
+    printk(KERN_ALERT "[DEBUG] Init allocated (major, minor)=(%d,%d)\n",MAJOR(first_dev),MINOR(first_dev));
     
     /* allocation des structures pour les operations */
     my_cdev = cdev_alloc();
@@ -75,7 +76,6 @@ int init_periph(void){
         printk(KERN_ALERT "[ERROR] init_periph -> cdev_add\n");
         return -EINVAL;
     }
-    //data.buffer = (char *)kmalloc(BUF_SIZE * sizeof(char), GFP_KERNEL);
     data.size = 0;
     
     return 0;
@@ -91,6 +91,7 @@ static void cleanup_periph(void){
     unregister_chrdev_region(first_dev,1);
     /* liberation du cdev */
     cdev_del(my_cdev);
+    printk(KERN_ALERT "[DEBUG] Desinstalle\n");
 }
 
 /*
@@ -118,8 +119,6 @@ static int release_periph(struct inode *str_inode, struct file *str_file){
  * -> retourne la taille lu
  */
 static ssize_t read_periph(struct file *f, char *buffer, size_t size, loff_t *offset){
-    printk(KERN_ALERT "[DEBUG] Lecture\n");
-    
     //recuperation taille a copier dans le buffer
     int sizeToCopy;
     if (MAX_BUF_SIZE < size)
@@ -129,14 +128,16 @@ static ssize_t read_periph(struct file *f, char *buffer, size_t size, loff_t *of
     
     //copie des données vers l'espace utilisateur
     if(data.size != 0){
-        if(copy_to_user(buffer, data.buffer, sizeToCopy)==0)
+        if(copy_to_user(buffer, data.buffer, sizeToCopy)==0){
+            printk(KERN_ALERT "[DEBUG] Lecture de %lu octets : %s\n",data.size,data.buffer);
             kfree(data.buffer);     //lecture destructrice
             data.size = 0;          //buffer vide
+        }
         else
             return -EFAULT;
     }
     
-    return sizeToCopy;
+    return data.size;
 }
 
 /*
@@ -144,18 +145,19 @@ static ssize_t read_periph(struct file *f, char *buffer, size_t size, loff_t *of
  * -> retourne la taille restant a ecrire
  */
 static ssize_t write_periph(struct file *f, const char *buf, size_t size, loff_t *offset){
-    printk(KERN_ALERT "[DEBUG] Ecriture\n");
     //on vide le buffer avant utilisation (ecriture destructrice)
     if(data.size != 0){
         kfree(data.buffer);
         data.size = 0;
     }
     
-    //allocation memoire du nouveau buffer de taille "BUF_SIZE"
+    //allocation memoire du nouveau buffer de taille "size"
     data.buffer = (char *)kmalloc(size * sizeof(char), GFP_KERNEL);
     
     //recuperation des données depuis l'espace utilisateur
-    data.size = copy_from_user(data.buffer, buf, size);
+    data.size = size - copy_from_user(data.buffer, buf, size);
     
-    return (size - data.size);
+    printk(KERN_ALERT "[DEBUG] Ecriture de %lu octets : %s\n",data.size,data.buffer);
+    
+    return data.size;
 }
