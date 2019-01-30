@@ -14,7 +14,7 @@
 #define DESCRIPTION "Module Peripherique TP2 simple"
 #define DEVICE "GPL"
 
-#define BUF_SIZE 256            //taille du buffer
+#define BUF_SIZE 4            //taille du buffer
 
 int init_periph(void);
 static void cleanup_periph(void);
@@ -66,6 +66,7 @@ dev_t first_dev;
 //structure pour les données du periph
 typedef struct {
     char* buffer;
+    bool mult_write;
 } Data;
 
 static Data data;
@@ -86,6 +87,8 @@ int init_periph(void){
     my_cdev = cdev_alloc();
     my_cdev->ops = &f_operator;
     my_cdev->owner = THIS_MODULE;
+    
+    data.mult_write = false;
     
     /* lien entre operations et periph */
     if (cdev_add(my_cdev,first_dev,1) < 0){
@@ -124,6 +127,9 @@ static int open_periph(struct inode *str_inode, struct file *str_file){
  * Liberation du periph
  */
 static int release_periph(struct inode *str_inode, struct file *str_file){
+    //fin des ecritures en serie
+    //data.mult_write = false;
+    
     //liberer les ref et objet alloc pendant l'open
     //desactiver le periph
     return 0;
@@ -160,7 +166,7 @@ static ssize_t read_periph(struct file *f, char *buffer, size_t size, loff_t *of
  */
 static ssize_t write_periph(struct file *f, const char *buf, size_t size, loff_t *offset){
     //on vide le buffer avant utilisation (ecriture destructrice)
-    if(data.buffer != NULL)
+    if(data.buffer != NULL/* && !data.mult_write */)
         kfree(data.buffer);
     
     //allocation memoire du nouveau buffer de taille "BUF_SIZE"
@@ -168,6 +174,8 @@ static ssize_t write_periph(struct file *f, const char *buf, size_t size, loff_t
     
     //recuperation des données depuis l'espace utilisateur
     int sizeCopy = copy_from_user(data.buffer, buf, size);
+    //on indique qu'on viens de faire une ecriture
+    //data.mult_write = true;
     
     printk(KERN_ALERT "[DEBUG] Ecriture : %s\n",data.buffer);
     
