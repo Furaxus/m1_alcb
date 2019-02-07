@@ -7,6 +7,7 @@
 #include <linux/cdev.h>
 #include <linux/fs.h>
 #include <asm/uaccess.h>        //pour copy_from_user / copy_to_user
+#include <linux/list.h>
 
 
 #define LICENCE "GPL"
@@ -14,7 +15,9 @@
 #define DESCRIPTION "Module Peripherique TP3 taille variable"
 #define DEVICE "GPL"
 
-#define MAX_BUF_SIZE 256
+#define DEBUG
+
+#define MAX_BUF_SIZE 5          //pour focer a faire plusieurs nodes
 
 int init_periph(void);
 static void cleanup_periph(void);
@@ -47,12 +50,30 @@ struct cdev *my_cdev;
 dev_t first_dev;
 bool file_open = false;
 //structure pour les données du periph
-typedef struct {
+typedef struct s_data {
     char* buffer;
     size_t size;
+    char* offset;
+    struct list_head lst;
 } Data;
 
-static Data data;
+struct list_head data_lst;
+bool first_write;
+
+/*
+ * Supprime les donnees dans data_lst
+ */
+void delete_data(void){
+    //supression de la liste
+    Data *elem;
+    struct list_head *ptr;
+    list_for_each(ptr, &data_lst) {
+        elem = list_entry(ptr, Data, lst);
+        list_del(&(elem->lst));
+        kfree(elem->buffer);
+        kfree(elem);
+    }
+}
 
 /*
  * Initialisation du module
@@ -64,19 +85,20 @@ int init_periph(void){
         return -EINVAL;
     }
     
-    printk(KERN_ALERT "[DEBUG] Init allocated (major, minor)=(%d,%d)\n",MAJOR(first_dev),MINOR(first_dev));
+    printk(KERN_ALERT "Init allocated (major, minor)=(%d,%d)\n",MAJOR(first_dev),MINOR(first_dev));
     
     /* allocation des structures pour les operations */
     my_cdev = cdev_alloc();
     my_cdev->ops = &f_operator;
     my_cdev->owner = THIS_MODULE;
     
+    INIT_LIST_HEAD(&data_lst);
+    
     /* lien entre operations et periph */
     if (cdev_add(my_cdev,first_dev,1) < 0){
         printk(KERN_ALERT "[ERROR] init_periph -> cdev_add\n");
         return -EINVAL;
     }
-    data.size = 0;
     
     return 0;
 }
@@ -85,13 +107,16 @@ int init_periph(void){
  * Suppression du module
  */
 static void cleanup_periph(void){
-    if (data.buffer != NULL)
-        kfree(data.buffer);
+    delete_data();
+    list_del(&data_lst);
+    
     /* liberation des majeurs / mineurs */
     unregister_chrdev_region(first_dev,1);
     /* liberation du cdev */
     cdev_del(my_cdev);
+#ifdef DEBUG
     printk(KERN_ALERT "[DEBUG] Desinstalle\n");
+#endif
 }
 
 /*
@@ -99,6 +124,7 @@ static void cleanup_periph(void){
  */
 static int open_periph(struct inode *str_inode, struct file *str_file){
     //verif etat
+    first_write = true;
     //init periph
     //indentifier mineur
     //alloc et maj données privées
@@ -116,28 +142,41 @@ static int release_periph(struct inode *str_inode, struct file *str_file){
 
 /*
  * Fonction de lecture du periph
- * -> retourne la taille lu
+ * -> retourne le nb d'octets lu
  */
 static ssize_t read_periph(struct file *f, char *buffer, size_t size, loff_t *offset){
-    //recuperation taille a copier dans le buffer
-    int sizeToCopy;
-    if (MAX_BUF_SIZE < size)
-        sizeToCopy = MAX_BUF_SIZE;
-    else
-        sizeToCopy = size;
+    first_write = false;
+    size_t sizeToCopy = 0;
+    Data *data;
     
     //copie des données vers l'espace utilisateur
-    if(data.size != 0){
-        if(copy_to_user(buffer, data.buffer, sizeToCopy)==0){
-            printk(KERN_ALERT "[DEBUG] Lecture de %lu octets : %s\n",data.size,data.buffer);
-            kfree(data.buffer);     //lecture destructrice
-            data.size = 0;          //buffer vide
+    if(!list_empty(&data_lst)){
+        data = list_first_entry(&data_lst, Data, lst);
+        //recuperation taille a copier dans le buffer
+        if (data->size < size)
+            sizeToCopy = data->size;
+        else
+            sizeToCopy = size;
+        
+        //copy
+        if(copy_to_user(buffer, data->offset, sizeToCopy)==0){
+#ifdef DEBUG
+            printk(KERN_ALERT "[DEBUG] Lecture de %lu octets : %s\n",data->size,data->offset);
+#endif
+            data->offset += sizeToCopy;
+            data->size -= sizeToCopy;
+            //supression de la node si tout les octets ont ete lu
+            if (data->size == 0){
+                list_del(&(data->lst));
+                kfree(data->buffer);
+                kfree(data);
+            }
         }
         else
             return -EFAULT;
     }
     
-    return data.size;
+    return sizeToCopy;
 }
 
 /*
@@ -145,19 +184,33 @@ static ssize_t read_periph(struct file *f, char *buffer, size_t size, loff_t *of
  * -> retourne la taille restant a ecrire
  */
 static ssize_t write_periph(struct file *f, const char *buf, size_t size, loff_t *offset){
-    //on vide le buffer avant utilisation (ecriture destructrice)
-    if(data.size != 0){
-        kfree(data.buffer);
-        data.size = 0;
+    int sizeToCopy;
+    Data *data;
+    
+    //ecriture destructrice
+    if (first_write) {
+        delete_data();
+        first_write = false;
     }
+
+    //calcul de la taille pour faire plusieurs nodes
+    if (MAX_BUF_SIZE < size)
+        sizeToCopy = MAX_BUF_SIZE;
+    else
+        sizeToCopy = size;
     
+    //creation de la node
+    data = (Data *)kmalloc(sizeof(struct s_data), GFP_KERNEL);
     //allocation memoire du nouveau buffer de taille "size"
-    data.buffer = (char *)kmalloc(size * sizeof(char), GFP_KERNEL);
+    data->buffer = (char *)kmalloc(sizeToCopy * sizeof(char), GFP_KERNEL);
+    data->offset = data->buffer;
+    data->size = sizeToCopy - copy_from_user(data->buffer, buf, sizeToCopy);
+    INIT_LIST_HEAD(&(data->lst));
+    list_add_tail(&(data->lst),&data_lst);
     
-    //recuperation des données depuis l'espace utilisateur
-    data.size = size - copy_from_user(data.buffer, buf, size);
+#ifdef DEBUG
+    printk(KERN_ALERT "[DEBUG] Ecriture de %lu octets : %s\n",data->size,data->buffer);
+#endif
     
-    printk(KERN_ALERT "[DEBUG] Ecriture de %lu octets : %s\n",data.size,data.buffer);
-    
-    return data.size;
+    return data->size;
 }
