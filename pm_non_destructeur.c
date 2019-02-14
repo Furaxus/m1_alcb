@@ -12,7 +12,7 @@
 
 #define LICENCE "GPL"
 #define AUTEUR "Zaragoza Jérémy jeremy.zaragoza@univ-tlse3.fr"
-#define DESCRIPTION "Module Peripherique TP3 taille variable"
+#define DESCRIPTION "Module Peripherique TP4 ecriture non destructrice"
 #define DEVICE "GPL"
 
 #define DEBUG
@@ -58,7 +58,6 @@ typedef struct s_data {
 } Data;
 
 struct list_head data_lst;
-bool first_write;
 
 /*
  * Supprime les donnees dans data_lst
@@ -127,7 +126,6 @@ static int open_periph(struct inode *str_inode, struct file *str_file){
     printk(KERN_ALERT "[DEBUG] Open\n");
 #endif
     //verif etat
-    first_write = true;
     //init periph
     //indentifier mineur
     //alloc et maj données privées
@@ -192,12 +190,6 @@ static ssize_t write_periph(struct file *f, const char *buf, size_t size, loff_t
     int sizeToCopy;
     Data *data;
     
-    //ecriture destructrice
-    if (first_write) {
-        delete_data();
-        first_write = false;
-    }
-
     //calcul de la taille pour faire plusieurs nodes
     if (MAX_BUF_SIZE < size)
         sizeToCopy = MAX_BUF_SIZE;
@@ -214,7 +206,7 @@ static ssize_t write_periph(struct file *f, const char *buf, size_t size, loff_t
     list_add_tail(&(data->lst),&data_lst);
     
 #ifdef DEBUG
-    printk(KERN_ALERT "[DEBUG] Ecriture de %lu octets : %s\n",data->size,data->buffer);
+    printk(KERN_ALERT "[DEBUG] Ecriture de %lu octets\n",data->size,data->buffer);
 #endif
     
     return data->size;
