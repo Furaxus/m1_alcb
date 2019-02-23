@@ -8,6 +8,7 @@
 #include <linux/fs.h>
 #include <asm/uaccess.h>        //pour copy_from_user / copy_to_user
 #include <linux/list.h>
+#include <linux/string.h>
 
 
 #define LICENCE "GPL"
@@ -26,6 +27,7 @@ static int open_periph(struct inode *str_inode, struct file *str_file);
 static int release_periph(struct inode *str_inode, struct file *str_file);
 static ssize_t read_periph(struct file *f, char *buffer, size_t size, loff_t *offset);
 static ssize_t write_periph(struct file *f, const char *buf, size_t size, loff_t *offset);
+static ssize_t read_non_destr_periph(struct file *f, char *buffer, size_t size, loff_t *offset);
 
 module_init(init_periph); 
 module_exit(cleanup_periph);
@@ -60,6 +62,7 @@ typedef struct s_data {
 } Data;
 
 struct list_head data_lst;
+Data *data_current;
 
 /*
  * Supprime les donnees dans data_lst
@@ -76,20 +79,6 @@ void delete_data(void){
     }
 }
 
-/*
- * Reset les pointeur de lecture non destructrice
- */
-/*
-void reset_nd_pointeur(void){
-    Data *elem;
-    struct list_head *ptr;
-    list_for_each(ptr, &data_lst) {
-        elem = list_entry(ptr, Data, lst);
-        elem->nd_offset = elem->buffer;
-        elem->nd_size = elem->init_size;
-    }
-}
-*/
 
 /*
  * Initialisation du module
@@ -111,6 +100,7 @@ int init_periph(void){
     my_cdev->owner = THIS_MODULE;
     
     INIT_LIST_HEAD(&data_lst);
+    data_current = NULL;
     
     /* lien entre operations et periph */
     if (cdev_add(my_cdev,first_dev,NB_DEVICE) < 0){
@@ -158,6 +148,9 @@ static int open_periph(struct inode *str_inode, struct file *str_file){
         case 1 :
             f_operator.read = &read_periph;
             break;
+        case 2 :
+            f_operator.read = &read_non_destr_periph;
+            break;
         default:
             break;
     }
@@ -184,10 +177,13 @@ static int release_periph(struct inode *str_inode, struct file *str_file){
 static ssize_t read_periph(struct file *f, char *buffer, size_t size, loff_t *offset){
     size_t sizeToCopy = 0;
     Data *data;
+    char* str_debut;
+    char* str_milieu;
+    char* str_fin;
     
     //copie des données vers l'espace utilisateur
     if(!list_empty(&data_lst)){
-        data = list_first_entry(&data_lst, Data, lst);
+        data = data_current;
         //recuperation taille a copier dans le buffer
         if (data->size < size)
             sizeToCopy = data->size;
@@ -199,17 +195,29 @@ static ssize_t read_periph(struct file *f, char *buffer, size_t size, loff_t *of
 #ifdef DEBUG
             printk(KERN_ALERT "[DEBUG] Lecture de %lu octets\n",data->size);
 #endif
-            /*
-             * TODO REALLOCATION MEMOIRE DU BUFFER SI LA LECTURE DEST NE LIT PAS TOUTE LA NODE
-             */
+            //copy des chaines
+            strlcpy(str_debut,data->buffer,(data->init_size - data->size)+1);
+            strlcpy(str_milieu,data->offset,sizeToCopy+1);
+            strlcpy(str_fin,(data->offset)+sizeToCopy,(data->size)-sizeToCopy + 1);
+            //liberation de la node
+            kfree(data->buffer);
+            //creation du nouveau contenu
+            strcat(str_debut,str_fin);
+            data->buffer = (char *)kmalloc(strlen(str_debut) * sizeof(char), GFP_KERNEL);
+            data->init_size = strlen(str_debut);
+            //reduction de la taille restante dispo
             data->size -= sizeToCopy;
+            //deplacement de l'offset
             data->offset = data->buffer + (data->init_size - data->size);
+            //changement de node si il n'y a plus de lecture possible dans cette node
+            if (data->size <= 0)
+                data_current = list_next_entry(data,lst);
             //supression de la node si tout les octets ont ete lu
             if (data->init_size <= 0){
                 list_del(&(data->lst));
                 kfree(data->buffer);
                 kfree(data);
-            }
+            } 
         }
         else
             return -EFAULT;
@@ -228,7 +236,7 @@ static ssize_t read_non_destr_periph(struct file *f, char *buffer, size_t size, 
     
     //copie des données vers l'espace utilisateur
     if(!list_empty(&data_lst)){
-        data = list_first_entry(&data_lst, Data, lst);
+        data = data_current;
         //recuperation taille a copier dans le buffer
         if (data->size < size)
             sizeToCopy = data->size;
@@ -242,6 +250,9 @@ static ssize_t read_non_destr_periph(struct file *f, char *buffer, size_t size, 
 #endif
             data->offset += sizeToCopy;
             data->size -= sizeToCopy;
+            //changement de node si il n'y a plus de lecture possible dans cette node
+            if (data->size <= 0)
+                data_current = list_next_entry(data,lst);
         }
         else
             return -EFAULT;
@@ -269,11 +280,11 @@ static ssize_t write_periph(struct file *f, const char *buf, size_t size, loff_t
     //allocation memoire du nouveau buffer de taille "size"
     data->buffer = (char *)kmalloc(sizeToCopy * sizeof(char), GFP_KERNEL);
     data->offset = data->buffer;
-    data->nd_offset = data->buffer;
-    data->init = sizeToCopy - copy_from_user(data->buffer, buf, sizeToCopy);
-    data->size = data->init;
-    data->nd_size = data->init;
+    data->init_size = sizeToCopy - copy_from_user(data->buffer, buf, sizeToCopy);
+    data->size = data->init_size;
     INIT_LIST_HEAD(&(data->lst));
+    if (list_empty(&data_lst))
+        data_current = data;
     list_add_tail(&(data->lst),&data_lst);
     
 #ifdef DEBUG

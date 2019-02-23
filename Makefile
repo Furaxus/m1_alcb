@@ -1,4 +1,5 @@
 tp_files := hello_world.o pm_simple.o pm_taille_variable.o
+modules_names := hello_world pm_simple pm_taille_variable
 
 ifneq ($(KERNELRELEASE),)
 	obj-m := $(tp_files)

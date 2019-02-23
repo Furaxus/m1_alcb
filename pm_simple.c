@@ -66,7 +66,7 @@ dev_t first_dev;
 //structure pour les données du periph
 typedef struct {
     char* buffer;
-    bool mult_write;
+    size_t size;
 } Data;
 
 static Data data;
@@ -88,7 +88,8 @@ int init_periph(void){
     my_cdev->ops = &f_operator;
     my_cdev->owner = THIS_MODULE;
     
-    data.mult_write = false;
+    //allocation memoire du nouveau buffer de taille "BUF_SIZE"
+    data.buffer = (char *)kmalloc(BUF_SIZE * sizeof(char), GFP_KERNEL);
     
     /* lien entre operations et periph */
     if (cdev_add(my_cdev,first_dev,1) < 0){
@@ -109,17 +110,19 @@ static void cleanup_periph(void){
     unregister_chrdev_region(first_dev,1);
     /* liberation du cdev */
     cdev_del(my_cdev);
-    printk(KERN_ALERT "[DEBUG] Desinstalle\n");
+    printk(KERN_ALERT "[DEBUG] Cleanup\n");
 }
 
 /*
  * Fonction utilisé lors de l'utilisation du periph
  */
 static int open_periph(struct inode *str_inode, struct file *str_file){
+    printk(KERN_ALERT "[DEBUG] Open\n");
+    
     //verif etat
     //init periph
     //indentifier mineur
-    //alloc et maj données privées
+    
     return 0;
 }
 
@@ -127,8 +130,7 @@ static int open_periph(struct inode *str_inode, struct file *str_file){
  * Liberation du periph
  */
 static int release_periph(struct inode *str_inode, struct file *str_file){
-    //fin des ecritures en serie
-    //data.mult_write = false;
+    printk(KERN_ALERT "[DEBUG] Release\n");
     
     //liberer les ref et objet alloc pendant l'open
     //desactiver le periph
@@ -147,37 +149,36 @@ static ssize_t read_periph(struct file *f, char *buffer, size_t size, loff_t *of
     else
         sizeToCopy = size;
     
+    printk(KERN_ALERT "[DEBUG] %lu\n",size);
+    
     //copie des données vers l'espace utilisateur
     if(data.buffer != NULL){
         if(copy_to_user(buffer, data.buffer, sizeToCopy)==0){
             printk(KERN_ALERT "[DEBUG] Lecture : %s\n",data.buffer);
-            kfree(data.buffer);     //lecture destructrice
         }
         else
             return -EFAULT;
     }
     
-    return sizeToCopy;
+    return 0;
 }
 
 /*
  * Fonction d'ecriture du peripherique
- * -> retourne la taille restant a ecrire
+ * -> retourne le nombre d'octet ecrit
  */
 static ssize_t write_periph(struct file *f, const char *buf, size_t size, loff_t *offset){
-    //on vide le buffer avant utilisation (ecriture destructrice)
-    if(data.buffer != NULL/* && !data.mult_write */)
-        kfree(data.buffer);
     
-    //allocation memoire du nouveau buffer de taille "BUF_SIZE"
-    data.buffer = (char *)kmalloc(BUF_SIZE * sizeof(char), GFP_KERNEL);
+    int sizeToCopy;
+    if (BUF_SIZE < size)
+        sizeToCopy = BUF_SIZE;
+    else
+        sizeToCopy = size;
     
-    //recuperation des données depuis l'espace utilisateur
-    int sizeCopy = copy_from_user(data.buffer, buf, size);
-    //on indique qu'on viens de faire une ecriture
-    //data.mult_write = true;
+    //recuperation des données depuis l'espace utilisateur + taille
+    data.size = sizeToCopy - copy_from_user(data.buffer, buf, sizeToCopy);
     
     printk(KERN_ALERT "[DEBUG] Ecriture : %s\n",data.buffer);
     
-    return (size - sizeCopy);
+    return (data.size);
 }
